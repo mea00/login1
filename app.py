@@ -1,4 +1,5 @@
 import os
+import json
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 from werkzeug.security import generate_password_hash, check_password_hash
 import firebase_admin
@@ -11,7 +12,13 @@ app = Flask(__name__)
 app.secret_key = 'secret_key'
 
 # Firebase yapılandırması
-cred = credentials.Certificate("firebase_key.json")  # Firebase hizmet hesabı dosyanız
+if os.environ.get('FIREBASE_KEY_JSON'):
+    # Vercel için çevresel değişken kullanımı
+    cred_info = json.loads(os.environ.get('FIREBASE_KEY_JSON'))
+    cred = credentials.Certificate(cred_info)  # Firebase hizmet hesabı bilgilerini çevresel değişkenden alıyoruz
+else:
+    # Yerel için firebase_key.json kullanımı
+    cred = credentials.Certificate("firebase_key.json")  # Firebase hizmet hesabı dosyanız
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -147,4 +154,3 @@ def logout():
 
 if __name__ == '__main__':
     app.run(debug=True)
-#selam

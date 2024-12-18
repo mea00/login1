@@ -9,6 +9,7 @@ from email.mime.multipart import MIMEMultipart
 app = Flask(__name__)
 app.secret_key = 'secret_key'
 
+<<<<<<< HEAD
 # SQLite Veritabanı bağlantısı
 DATABASE = 'database.db'
 
@@ -30,6 +31,17 @@ with get_db_connection() as conn:
         gsm TEXT,
         profile_photo TEXT
     )''')
+=======
+# Firebase yapılandırması
+if os.path.exists("firebase_key.json"):
+    # firebase_key.json kullanımı
+    cred = credentials.Certificate("firebase_key.json")
+else:
+    raise FileNotFoundError("firebase_key.json dosyası bulunamadı. Lütfen dosyayı doğru yere yerleştirin.")
+
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+>>>>>>> a060b080e921c5f036f995ae6893a7687edffca7
 
 # Kullanıcı e-posta gönderimi
 def send_email(to_email):

@@ -1,9 +1,7 @@
 import os
-import json
+import sqlite3
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 from werkzeug.security import generate_password_hash, check_password_hash
-import firebase_admin
-from firebase_admin import credentials, firestore
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -11,16 +9,27 @@ from email.mime.multipart import MIMEMultipart
 app = Flask(__name__)
 app.secret_key = 'secret_key'
 
-# Firebase yapılandırması
-if os.environ.get('FIREBASE_KEY_JSON'):
-    # Vercel için çevresel değişken kullanımı
-    cred_info = json.loads(os.environ.get('FIREBASE_KEY_JSON'))
-    cred = credentials.Certificate(cred_info)  # Firebase hizmet hesabı bilgilerini çevresel değişkenden alıyoruz
-else:
-    # Yerel için firebase_key.json kullanımı
-    cred = credentials.Certificate("firebase_key.json")  # Firebase hizmet hesabı dosyanız
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+# SQLite Veritabanı bağlantısı
+DATABASE = 'database.db'
+
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# Veritabanı tablolarını oluşturma
+with get_db_connection() as conn:
+    conn.execute('''CREATE TABLE IF NOT EXISTS users (
+        email TEXT PRIMARY KEY,
+        password TEXT NOT NULL,
+        first_name TEXT,
+        last_name TEXT,
+        organization TEXT,
+        department TEXT,
+        work_phone TEXT,
+        gsm TEXT,
+        profile_photo TEXT
+    )''')
 
 # Kullanıcı e-posta gönderimi
 def send_email(to_email):
@@ -73,15 +82,18 @@ def register():
         }
 
         try:
-            # Firebase'de kullanıcı kaydı oluştur
-            user_ref = db.collection('users').document(email)
-            user_ref.set(user_data)
+            with get_db_connection() as conn:
+                conn.execute('''INSERT INTO users (email, password, first_name, last_name, organization, department, work_phone, gsm, profile_photo)
+                                VALUES (:email, :password, :first_name, :last_name, :organization, :department, :work_phone, :gsm, :profile_photo)''',
+                             user_data)
 
             send_email(email)
             flash("Kayıt başarılı! Lütfen giriş yapın.", "success")
             return redirect(url_for('login'))
+        except sqlite3.IntegrityError:
+            flash("Bu e-posta adresi zaten kayıtlı.", "danger")
         except Exception as e:
-            print(f"Firebase kaydı sırasında hata: {e}")
+            print(f"Veritabanı kaydı sırasında hata: {e}")
             flash("Bir hata oluştu. Lütfen tekrar deneyin.", "danger")
 
     return render_template('register.html')
@@ -94,21 +106,17 @@ def login():
         password = request.form.get('password')
 
         try:
-            user_ref = db.collection('users').document(email)
-            user = user_ref.get()
+            with get_db_connection() as conn:
+                user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
 
-            if user.exists:
-                user_data = user.to_dict()
-                if check_password_hash(user_data['password'], password):
-                    session['user_id'] = email
-                    flash("Giriş başarılı!", "success")
-                    return redirect(url_for('hello'))
-                else:
-                    flash("Geçersiz giriş bilgileri.", "danger")
+            if user and check_password_hash(user['password'], password):
+                session['user_id'] = email
+                flash("Giriş başarılı!", "success")
+                return redirect(url_for('hello'))
             else:
-                flash("E-posta adresi bulunamadı.", "danger")
+                flash("Geçersiz giriş bilgileri.", "danger")
         except Exception as e:
-            print(f"Firebase sorgusu sırasında hata: {e}")
+            print(f"Veritabanı sorgusu sırasında hata: {e}")
             flash("Bir hata oluştu. Lütfen tekrar deneyin.", "danger")
 
     return render_template('login.html')
@@ -120,28 +128,30 @@ def hello():
         flash("Bu sayfaya erişmek için lütfen giriş yapın.", "danger")
         return redirect(url_for('login'))
 
-    # Firebase'den kullanıcı bilgilerini çekme
     email = session['user_id']
-    user_ref = db.collection('users').document(email)
-    user = user_ref.get().to_dict()
 
-    if request.method == 'POST':
-        # Eksik bilgileri kaydet
-        updated_data = {
-            "first_name": request.form.get('first_name'),
-            "last_name": request.form.get('last_name'),
-            "organization": request.form.get('organization'),
-            "department": request.form.get('department'),
-            "work_phone": request.form.get('work_phone'),
-            "gsm": request.form.get('gsm'),
-        }
-        try:
-            user_ref.update(updated_data)
+    try:
+        with get_db_connection() as conn:
+            user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+
+        if request.method == 'POST':
+            updated_data = {
+                "first_name": request.form.get('first_name'),
+                "last_name": request.form.get('last_name'),
+                "organization": request.form.get('organization'),
+                "department": request.form.get('department'),
+                "work_phone": request.form.get('work_phone'),
+                "gsm": request.form.get('gsm'),
+                "email": email
+            }
+            with get_db_connection() as conn:
+                conn.execute('''UPDATE users SET first_name = :first_name, last_name = :last_name, organization = :organization, 
+                                department = :department, work_phone = :work_phone, gsm = :gsm WHERE email = :email''',
+                             updated_data)
             flash("Bilgileriniz başarıyla güncellendi.", "success")
-            user.update(updated_data)
-        except Exception as e:
-            print(f"Firebase güncellemesi sırasında hata: {e}")
-            flash("Bilgiler güncellenirken bir hata oluştu.", "danger")
+    except Exception as e:
+        print(f"Veritabanı güncellemesi sırasında hata: {e}")
+        flash("Bilgiler güncellenirken bir hata oluştu.", "danger")
 
     return render_template('hello.html', user=user)
 

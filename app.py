@@ -12,13 +12,12 @@ app = Flask(__name__)
 app.secret_key = 'secret_key'
 
 # Firebase yapılandırması
-if os.environ.get('FIREBASE_KEY_JSON'):
-    # Vercel için çevresel değişken kullanımı
-    cred_info = json.loads(os.environ.get('FIREBASE_KEY_JSON'))
-    cred = credentials.Certificate(cred_info)  # Firebase hizmet hesabı bilgilerini çevresel değişkenden alıyoruz
+if os.path.exists("firebase_key.json"):
+    # firebase_key.json kullanımı
+    cred = credentials.Certificate("firebase_key.json")
 else:
-    # Yerel için firebase_key.json kullanımı
-    cred = credentials.Certificate("firebase_key.json")  # Firebase hizmet hesabı dosyanız
+    raise FileNotFoundError("firebase_key.json dosyası bulunamadı. Lütfen dosyayı doğru yere yerleştirin.")
+
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 

@@ -10,26 +10,32 @@ app = Flask(__name__)
 app.secret_key = 'secret_key'
 
 # SQLite Veritabanı bağlantısı
-DATABASE = 'database.db'
+DATABASE = '/tmp/database.db'  # Vercel'de yazılabilir dizin
 
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect(DATABASE)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error as e:
+        print(f"Veritabanı bağlantı hatası: {e}")
+        return None
 
 # Veritabanı tablolarını oluşturma
-with get_db_connection() as conn:
-    conn.execute('''CREATE TABLE IF NOT EXISTS users (
-        email TEXT PRIMARY KEY,
-        password TEXT NOT NULL,
-        first_name TEXT,
-        last_name TEXT,
-        organization TEXT,
-        department TEXT,
-        work_phone TEXT,
-        gsm TEXT,
-        profile_photo TEXT
-    )''')
+if not os.path.exists(DATABASE):
+    with sqlite3.connect(DATABASE) as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            first_name TEXT,
+            last_name TEXT,
+            organization TEXT,
+            department TEXT,
+            work_phone TEXT,
+            gsm TEXT,
+            profile_photo TEXT
+        )''')
+        print("Veritabanı oluşturuldu.")
 
 # Kullanıcı e-posta gönderimi
 def send_email(to_email):
@@ -83,13 +89,12 @@ def register():
 
         try:
             with get_db_connection() as conn:
-                conn.execute('''INSERT INTO users (email, password, first_name, last_name, organization, department, work_phone, gsm, profile_photo)
-                                VALUES (:email, :password, :first_name, :last_name, :organization, :department, :work_phone, :gsm, :profile_photo)''',
-                             user_data)
-
-            send_email(email)
-            flash("Kayıt başarılı! Lütfen giriş yapın.", "success")
-            return redirect(url_for('login'))
+                if conn is not None:
+                    conn.execute('''INSERT INTO users (email, password, first_name, last_name, organization, department, work_phone, gsm, profile_photo)
+                                    VALUES (:email, :password, :first_name, :last_name, :organization, :department, :work_phone, :gsm, :profile_photo)''',
+                                 user_data)
+                    flash("Kayıt başarılı! Lütfen giriş yapın.", "success")
+                    return redirect(url_for('login'))
         except sqlite3.IntegrityError:
             flash("Bu e-posta adresi zaten kayıtlı.", "danger")
         except Exception as e:
@@ -107,7 +112,8 @@ def login():
 
         try:
             with get_db_connection() as conn:
-                user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+                if conn is not None:
+                    user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
 
             if user and check_password_hash(user['password'], password):
                 session['user_id'] = email
@@ -132,7 +138,8 @@ def hello():
 
     try:
         with get_db_connection() as conn:
-            user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+            if conn is not None:
+                user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
 
         if request.method == 'POST':
             updated_data = {
@@ -145,9 +152,10 @@ def hello():
                 "email": email
             }
             with get_db_connection() as conn:
-                conn.execute('''UPDATE users SET first_name = :first_name, last_name = :last_name, organization = :organization, 
-                                department = :department, work_phone = :work_phone, gsm = :gsm WHERE email = :email''',
-                             updated_data)
+                if conn is not None:
+                    conn.execute('''UPDATE users SET first_name = :first_name, last_name = :last_name, organization = :organization, 
+                                    department = :department, work_phone = :work_phone, gsm = :gsm WHERE email = :email''',
+                                 updated_data)
             flash("Bilgileriniz başarıyla güncellendi.", "success")
     except Exception as e:
         print(f"Veritabanı güncellemesi sırasında hata: {e}")
@@ -164,4 +172,3 @@ def logout():
 
 if __name__ == '__main__':
     app.run(debug=True)
-

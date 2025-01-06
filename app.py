@@ -6,12 +6,16 @@ from psycopg2.extras import RealDictCursor
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from dotenv import load_dotenv  # .env dosyasını yüklemek için
+
+# .env dosyasını yükle
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = 'secret_key'
 
 # PostgreSQL bağlantı ayarları
-DATABASE_URL = "postgresql://postgres:wrAeHQzqeeTpoDSauXvWyWnfOTxCqnYt@monorail.proxy.rlwy.net:47382/railway"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
     try:
@@ -24,8 +28,7 @@ def get_db_connection():
 # SendGrid üzerinden e-posta gönderimi
 def send_email(to_email, subject, body):
     sender_email = "meadeneme00@gmail.com"  # SendGrid'de doğrulanmış e-posta adresiniz
-    sg_username = "cw1S8I4nTd6LeMM-KnkikA"  # SendGrid kullanıcı adı
-    sg_api_key = "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"  # SendGrid API anahtarı
+    sg_api_key = os.getenv("SENDGRID_API_KEY")  # API anahtarını .env dosyasından al
 
     msg = MIMEMultipart()
     msg["From"] = sender_email
@@ -36,7 +39,7 @@ def send_email(to_email, subject, body):
     try:
         server = smtplib.SMTP("smtp.sendgrid.net", 587)
         server.starttls()
-        server.login(sg_username, sg_api_key)
+        server.login("apikey", sg_api_key)
         server.sendmail(sender_email, to_email, msg.as_string())
         print(f"E-posta başarıyla gönderildi: {to_email}")
     except Exception as e:
@@ -100,19 +103,16 @@ def login():
                 cur.execute('SELECT * FROM users WHERE email = %s', (email,))
                 user = cur.fetchone()
 
-                if user:
-                    if check_password_hash(user['password'], password):
-                        if not user['is_active']:
-                            flash("Hesabınız aktif değil. Lütfen e-posta adresinize gelen doğrulama bağlantısını tıklayın.", "danger")
-                            return redirect(url_for('index'))
+                if user and check_password_hash(user['password'], password):
+                    if not user['is_active']:
+                        flash("Hesabınız aktif değil. Lütfen e-posta adresinize gelen doğrulama bağlantısını tıklayın.", "danger")
+                        return redirect(url_for('index'))
 
-                        session['user_id'] = email
-                        flash("Giriş başarılı!", "success")
-                        return redirect(url_for('hello'))
-                    else:
-                        flash("Şifre hatalı. Lütfen tekrar deneyin.", "danger")
+                    session['user_id'] = email
+                    flash("Giriş başarılı!", "success")
+                    return redirect(url_for('hello'))
                 else:
-                    flash("E-posta adresi bulunamadı. Lütfen kayıt olun.", "danger")
+                    flash("Geçersiz giriş bilgileri.", "danger")
         except Exception as e:
             print(f"Giriş hatası: {e}")
             flash("Bir hata oluştu. Lütfen tekrar deneyin.", "danger")
@@ -141,7 +141,7 @@ def forgot_password():
                     Teşekkürler,
                     """
                     send_email(email, subject, body)
-                    flash(f"Şifre sıfırlama bağlantısı '{email}' adresine gönderildi.", "success")
+                    flash("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.", "success")
                 else:
                     flash("Bu e-posta adresi sistemde kayıtlı değil.", "danger")
         except Exception as e:
@@ -154,12 +154,6 @@ def reset_password():
     email = request.args.get('email')
     if request.method == 'POST':
         new_password = request.form.get('new_password')
-        confirm_password = request.form.get('confirm_password')
-
-        if new_password != confirm_password:
-            flash("Şifreler uyuşmuyor. Lütfen tekrar deneyin.", "danger")
-            return render_template('reset_password.html', email=email)
-
         hashed_password = generate_password_hash(new_password, method='pbkdf2:sha256')
         try:
             with get_db_connection() as conn:

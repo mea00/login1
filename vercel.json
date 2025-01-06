@@ -1,11 +1,10 @@
 {
-  "builds": [
+    "builds": [
       { "src": "app.py", "use": "@vercel/python" }
-  ],
-  "routes": [
+    ],
+    "routes": [
       { "src": "/(.*)", "dest": "app.py" }
-  ],
-  "scripts": {
-      "build": "./build.sh"
+    ]
   }
-}
+  
+  

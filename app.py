@@ -1,11 +1,10 @@
 import os
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 from werkzeug.security import generate_password_hash, check_password_hash
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import smtplib
+import pg8000  # pg8000 modülü PostgreSQL bağlantısı için kullanılıyor
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import smtplib
 from dotenv import load_dotenv  # .env dosyasını yüklemek için
 
 # .env dosyasını yükle
@@ -19,7 +18,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
     try:
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        conn = pg8000.connect(DATABASE_URL)
         return conn
     except Exception as e:
         print(f"Veritabanı bağlantı hatası: {e}")
@@ -37,13 +36,16 @@ def send_email(to_email, subject, body):
     msg.attach(MIMEText(body, "plain"))
 
     try:
+        print("SMTP bağlantısı kuruluyor...")
         server = smtplib.SMTP("smtp.sendgrid.net", 587)
         server.starttls()
+        print("SendGrid'e giriş yapılıyor...")
         server.login("apikey", sg_api_key)
+        print("E-posta gönderiliyor...")
         server.sendmail(sender_email, to_email, msg.as_string())
         print(f"E-posta başarıyla gönderildi: {to_email}")
     except Exception as e:
-        print(f"E-posta gönderilirken bir hata oluştu: {e}")
+        print(f"E-posta gönderim hatası: {e}")
     finally:
         server.quit()
 
@@ -61,16 +63,16 @@ def register():
         user_data = (email, hashed_password, None, None, None, False)
 
         try:
-            with get_db_connection() as conn:
-                cur = conn.cursor()
-                cur.execute('SELECT * FROM users WHERE email = %s', (email,))
-                if cur.fetchone():
-                    flash("Bu e-posta adresi zaten kayıtlı.", "danger")
-                    return redirect(url_for('register'))
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('SELECT * FROM users WHERE email = %s', (email,))
+            if cur.fetchone():
+                flash("Bu e-posta adresi zaten kayıtlı.", "danger")
+                return redirect(url_for('register'))
 
-                cur.execute('''INSERT INTO users (email, password, first_name, last_name, profile_photo, is_active)
-                               VALUES (%s, %s, %s, %s, %s, %s)''', user_data)
-                conn.commit()
+            cur.execute('''INSERT INTO users (email, password, first_name, last_name, profile_photo, is_active)
+                           VALUES (%s, %s, %s, %s, %s, %s)''', user_data)
+            conn.commit()
 
             verification_url = f"http://127.0.0.1:5000/verify?email={email}"
             subject = "Hesap Aktivasyonu için Doğrulama Linkiniz"
@@ -98,21 +100,21 @@ def login():
         password = request.form.get('password')
 
         try:
-            with get_db_connection() as conn:
-                cur = conn.cursor()
-                cur.execute('SELECT * FROM users WHERE email = %s', (email,))
-                user = cur.fetchone()
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('SELECT * FROM users WHERE email = %s', (email,))
+            user = cur.fetchone()
 
-                if user and check_password_hash(user['password'], password):
-                    if not user['is_active']:
-                        flash("Hesabınız aktif değil. Lütfen e-posta adresinize gelen doğrulama bağlantısını tıklayın.", "danger")
-                        return redirect(url_for('index'))
+            if user and check_password_hash(user['password'], password):
+                if not user['is_active']:
+                    flash("Hesabınız aktif değil. Lütfen e-posta adresinize gelen doğrulama bağlantısını tıklayın.", "danger")
+                    return redirect(url_for('index'))
 
-                    session['user_id'] = email
-                    flash("Giriş başarılı!", "success")
-                    return redirect(url_for('hello'))
-                else:
-                    flash("Geçersiz giriş bilgileri.", "danger")
+                session['user_id'] = email
+                flash("Giriş başarılı!", "success")
+                return redirect(url_for('hello'))
+            else:
+                flash("Geçersiz giriş bilgileri.", "danger")
         except Exception as e:
             print(f"Giriş hatası: {e}")
             flash("Bir hata oluştu. Lütfen tekrar deneyin.", "danger")
@@ -123,27 +125,27 @@ def forgot_password():
     if request.method == 'POST':
         email = request.form.get('email')
         try:
-            with get_db_connection() as conn:
-                cur = conn.cursor()
-                cur.execute('SELECT * FROM users WHERE email = %s', (email,))
-                user = cur.fetchone()
-                if user:
-                    reset_url = f"http://127.0.0.1:5000/reset-password?email={email}"
-                    subject = "Şifre Sıfırlama Talebi"
-                    body = f"""
-                    Merhaba,
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('SELECT * FROM users WHERE email = %s', (email,))
+            user = cur.fetchone()
+            if user:
+                reset_url = f"http://127.0.0.1:5000/reset-password?email={email}"
+                subject = "Şifre Sıfırlama Talebi"
+                body = f"""
+                Merhaba,
 
-                    Şifrenizi sıfırlamak için aşağıdaki bağlantıya tıklayın:
-                    {reset_url}
+                Şifrenizi sıfırlamak için aşağıdaki bağlantıya tıklayın:
+                {reset_url}
 
-                    Eğer bu talebi siz yapmadıysanız, lütfen bu e-postayı dikkate almayın.
+                Eğer bu talebi siz yapmadıysanız, lütfen bu e-postayı dikkate almayın.
 
-                    Teşekkürler,
-                    """
-                    send_email(email, subject, body)
-                    flash("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.", "success")
-                else:
-                    flash("Bu e-posta adresi sistemde kayıtlı değil.", "danger")
+                Teşekkürler,
+                """
+                send_email(email, subject, body)
+                flash("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.", "success")
+            else:
+                flash("Bu e-posta adresi sistemde kayıtlı değil.", "danger")
         except Exception as e:
             print(f"Şifre sıfırlama hatası: {e}")
             flash("Bir hata oluştu. Lütfen tekrar deneyin.", "danger")
@@ -156,12 +158,12 @@ def reset_password():
         new_password = request.form.get('new_password')
         hashed_password = generate_password_hash(new_password, method='pbkdf2:sha256')
         try:
-            with get_db_connection() as conn:
-                cur = conn.cursor()
-                cur.execute('UPDATE users SET password = %s WHERE email = %s', (hashed_password, email))
-                conn.commit()
-                flash("Şifreniz başarıyla sıfırlandı. Lütfen giriş yapın.", "success")
-                return redirect(url_for('login'))
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('UPDATE users SET password = %s WHERE email = %s', (hashed_password, email))
+            conn.commit()
+            flash("Şifreniz başarıyla sıfırlandı. Lütfen giriş yapın.", "success")
+            return redirect(url_for('login'))
         except Exception as e:
             print(f"Şifre sıfırlama sırasında hata: {e}")
             flash("Bir hata oluştu. Lütfen tekrar deneyin.", "danger")
@@ -176,10 +178,10 @@ def hello():
     email = session['user_id']
 
     try:
-        with get_db_connection() as conn:
-            cur = conn.cursor()
-            cur.execute('SELECT * FROM users WHERE email = %s', (email,))
-            user = cur.fetchone()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM users WHERE email = %s', (email,))
+        user = cur.fetchone()
 
         if request.method == 'POST':
             updated_data = {
@@ -187,11 +189,11 @@ def hello():
                 "last_name": request.form.get('last_name'),
                 "profile_photo": request.form.get('profile_photo'),
             }
-            with get_db_connection() as conn:
-                cur = conn.cursor()
-                cur.execute('''UPDATE users SET first_name = %s, last_name = %s, profile_photo = %s WHERE email = %s''',
-                            (updated_data['first_name'], updated_data['last_name'], updated_data['profile_photo'], email))
-                conn.commit()
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute('''UPDATE users SET first_name = %s, last_name = %s, profile_photo = %s WHERE email = %s''',
+                        (updated_data['first_name'], updated_data['last_name'], updated_data['profile_photo'], email))
+            conn.commit()
             flash("Bilgileriniz başarıyla güncellendi.", "success")
     except Exception as e:
         print(f"Bilgi güncelleme hatası: {e}")
@@ -204,12 +206,12 @@ def verify():
     email = request.args.get('email')
 
     try:
-        with get_db_connection() as conn:
-            cur = conn.cursor()
-            cur.execute('UPDATE users SET is_active = TRUE WHERE email = %s', (email,))
-            conn.commit()
-            flash("E-posta doğrulama başarılı! Artık giriş yapabilirsiniz.", "success")
-            return redirect(url_for('login'))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('UPDATE users SET is_active = TRUE WHERE email = %s', (email,))
+        conn.commit()
+        flash("E-posta doğrulama başarılı! Artık giriş yapabilirsiniz.", "success")
+        return redirect(url_for('login'))
     except Exception as e:
         print(f"Doğrulama hatası: {e}")
         flash("Doğrulama sırasında bir hata oluştu.", "danger")

@@ -1,11 +1,13 @@
 import os
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 from werkzeug.security import generate_password_hash, check_password_hash
-import pg8000  # pg8000 modülü PostgreSQL bağlantısı için kullanılıyor
+import pg8000
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib
-from dotenv import load_dotenv  # .env dosyasını yüklemek için
+from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # .env dosyasını yükle
 load_dotenv()
@@ -24,10 +26,28 @@ def get_db_connection():
         print(f"Veritabanı bağlantı hatası: {e}")
         return None
 
+# Firebase yapılandırması
+firebase_config = {
+    "type": "service_account",
+    "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+    "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
+    "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),
+    "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+    "client_id": os.getenv("FIREBASE_CLIENT_ID"),
+    "auth_uri": os.getenv("FIREBASE_AUTH_URI"),
+    "token_uri": os.getenv("FIREBASE_TOKEN_URI"),
+    "auth_provider_x509_cert_url": os.getenv("FIREBASE_AUTH_PROVIDER_CERT_URL"),
+    "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL"),
+}
+
+cred = credentials.Certificate(firebase_config)
+firebase_admin.initialize_app(cred)
+firestore_db = firestore.client()
+
 # SendGrid üzerinden e-posta gönderimi
 def send_email(to_email, subject, body):
-    sender_email = "meadeneme00@gmail.com"  # SendGrid'de doğrulanmış e-posta adresiniz
-    sg_api_key = os.getenv("SENDGRID_API_KEY")  # API anahtarını .env dosyasından al
+    sender_email = "meadeneme00@gmail.com"
+    sg_api_key = os.getenv("SENDGRID_API_KEY")
 
     msg = MIMEMultipart()
     msg["From"] = sender_email
@@ -60,20 +80,17 @@ def register():
         password = request.form.get('password')
         hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
 
-        user_data = (email, hashed_password, None, None, None, False)
+        user_data = {
+            "email": email,
+            "password": hashed_password,
+            "is_active": False
+        }
 
         try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute('SELECT * FROM users WHERE email = %s', (email,))
-            if cur.fetchone():
-                flash("Bu e-posta adresi zaten kayıtlı.", "danger")
-                return redirect(url_for('register'))
+            # Firebase Firestore'a kullanıcı kaydet
+            firestore_db.collection("users").add(user_data)
 
-            cur.execute('''INSERT INTO users (email, password, first_name, last_name, profile_photo, is_active)
-                           VALUES (%s, %s, %s, %s, %s, %s)''', user_data)
-            conn.commit()
-
+            # E-posta doğrulama bağlantısı gönder
             verification_url = f"http://127.0.0.1:5000/verify?email={email}"
             subject = "Hesap Aktivasyonu için Doğrulama Linkiniz"
             body = f"""
@@ -100,21 +117,24 @@ def login():
         password = request.form.get('password')
 
         try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute('SELECT * FROM users WHERE email = %s', (email,))
-            user = cur.fetchone()
+            # Firestore'dan kullanıcıyı al
+            users = firestore_db.collection("users").where("email", "==", email).stream()
+            user = next(users, None)
 
-            if user and check_password_hash(user['password'], password):
-                if not user['is_active']:
-                    flash("Hesabınız aktif değil. Lütfen e-posta adresinize gelen doğrulama bağlantısını tıklayın.", "danger")
-                    return redirect(url_for('index'))
+            if user:
+                user_data = user.to_dict()
+                if check_password_hash(user_data['password'], password):
+                    if not user_data['is_active']:
+                        flash("Hesabınız aktif değil. Lütfen e-posta adresinize gelen doğrulama bağlantısını tıklayın.", "danger")
+                        return redirect(url_for('index'))
 
-                session['user_id'] = email
-                flash("Giriş başarılı!", "success")
-                return redirect(url_for('hello'))
+                    session['user_id'] = email
+                    flash("Giriş başarılı!", "success")
+                    return redirect(url_for('hello'))
+                else:
+                    flash("Geçersiz giriş bilgileri.", "danger")
             else:
-                flash("Geçersiz giriş bilgileri.", "danger")
+                flash("Kullanıcı bulunamadı.", "danger")
         except Exception as e:
             print(f"Giriş hatası: {e}")
             flash("Bir hata oluştu. Lütfen tekrar deneyin.", "danger")
@@ -125,10 +145,10 @@ def forgot_password():
     if request.method == 'POST':
         email = request.form.get('email')
         try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute('SELECT * FROM users WHERE email = %s', (email,))
-            user = cur.fetchone()
+            # Firestore'dan kullanıcıyı al
+            users = firestore_db.collection("users").where("email", "==", email).stream()
+            user = next(users, None)
+
             if user:
                 reset_url = f"http://127.0.0.1:5000/reset-password?email={email}"
                 subject = "Şifre Sıfırlama Talebi"
@@ -158,12 +178,16 @@ def reset_password():
         new_password = request.form.get('new_password')
         hashed_password = generate_password_hash(new_password, method='pbkdf2:sha256')
         try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute('UPDATE users SET password = %s WHERE email = %s', (hashed_password, email))
-            conn.commit()
-            flash("Şifreniz başarıyla sıfırlandı. Lütfen giriş yapın.", "success")
-            return redirect(url_for('login'))
+            # Firestore'da şifreyi güncelle
+            users = firestore_db.collection("users").where("email", "==", email).stream()
+            user = next(users, None)
+
+            if user:
+                user.reference.update({"password": hashed_password})
+                flash("Şifreniz başarıyla sıfırlandı. Lütfen giriş yapın.", "success")
+                return redirect(url_for('login'))
+            else:
+                flash("Kullanıcı bulunamadı.", "danger")
         except Exception as e:
             print(f"Şifre sıfırlama sırasında hata: {e}")
             flash("Bir hata oluştu. Lütfen tekrar deneyin.", "danger")
@@ -178,44 +202,46 @@ def hello():
     email = session['user_id']
 
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT * FROM users WHERE email = %s', (email,))
-        user = cur.fetchone()
+        # Firestore'dan kullanıcıyı al
+        users = firestore_db.collection("users").where("email", "==", email).stream()
+        user = next(users, None)
 
-        if request.method == 'POST':
-            updated_data = {
-                "first_name": request.form.get('first_name'),
-                "last_name": request.form.get('last_name'),
-                "profile_photo": request.form.get('profile_photo'),
-            }
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute('''UPDATE users SET first_name = %s, last_name = %s, profile_photo = %s WHERE email = %s''',
-                        (updated_data['first_name'], updated_data['last_name'], updated_data['profile_photo'], email))
-            conn.commit()
-            flash("Bilgileriniz başarıyla güncellendi.", "success")
+        if user:
+            user_data = user.to_dict()
+
+            if request.method == 'POST':
+                updated_data = {
+                    "first_name": request.form.get('first_name'),
+                    "last_name": request.form.get('last_name'),
+                    "profile_photo": request.form.get('profile_photo'),
+                }
+                user.reference.update(updated_data)
+                flash("Bilgileriniz başarıyla güncellendi.", "success")
     except Exception as e:
         print(f"Bilgi güncelleme hatası: {e}")
         flash("Bilgiler güncellenirken bir hata oluştu.", "danger")
 
-    return render_template('hello.html', user=user)
+    return render_template('hello.html', user=user_data)
 
 @app.route('/verify', methods=['GET'])
 def verify():
     email = request.args.get('email')
 
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('UPDATE users SET is_active = TRUE WHERE email = %s', (email,))
-        conn.commit()
-        flash("E-posta doğrulama başarılı! Artık giriş yapabilirsiniz.", "success")
-        return redirect(url_for('login'))
+        # Firestore'da kullanıcıyı aktif hale getir
+        users = firestore_db.collection("users").where("email", "==", email).stream()
+        user = next(users, None)
+
+        if user:
+            user.reference.update({"is_active": True})
+            flash("E-posta doğrulama başarılı! Artık giriş yapabilirsiniz.", "success")
+            return redirect(url_for('login'))
+        else:
+            flash("Kullanıcı bulunamadı.", "danger")
     except Exception as e:
         print(f"Doğrulama hatası: {e}")
         flash("Doğrulama sırasında bir hata oluştu.", "danger")
-        return redirect(url_for('index'))
+    return redirect(url_for('index'))
 
 @app.route('/logout', methods=['POST'])
 def logout():

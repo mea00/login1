@@ -91,16 +91,14 @@ def register():
             firestore_db.collection("users").add(user_data)
 
             # E-posta doğrulama bağlantısı gönder
-            verification_url = f"http://127.0.0.1:5000/verify?email={email}"
+            verification_url = f"{request.url_root}verify?email={email}"
             subject = "Hesap Aktivasyonu için Doğrulama Linkiniz"
             body = f"""
-            Merhaba,
-
+            
             Lütfen hesabınızı aktif hale getirmek için aşağıdaki bağlantıya tıklayın:
             {verification_url}
 
-            Teşekkürler,
-            Ekip
+            Teşekkürler
             """
             send_email(email, subject, body)
             flash("Kayıt başarılı! Lütfen e-posta adresinize gelen bağlantıyı doğrulayın.", "success")

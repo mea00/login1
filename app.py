@@ -94,11 +94,10 @@ def register():
             verification_url = f"{request.url_root}verify?email={email}"
             subject = "Hesap Aktivasyonu için Doğrulama Linkiniz"
             body = f"""
-            
+
             Lütfen hesabınızı aktif hale getirmek için aşağıdaki bağlantıya tıklayın:
             {verification_url}
 
-            Teşekkürler
             """
             send_email(email, subject, body)
             flash("Kayıt başarılı! Lütfen e-posta adresinize gelen bağlantıyı doğrulayın.", "success")
@@ -148,7 +147,7 @@ def forgot_password():
             user = next(users, None)
 
             if user:
-                reset_url = f"http://127.0.0.1:5000/reset-password?email={email}"
+                reset_url = url_for('reset_password', email=email, _external=True)
                 subject = "Şifre Sıfırlama Talebi"
                 body = f"""
                 Merhaba,
